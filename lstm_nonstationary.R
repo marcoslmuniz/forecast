@@ -1,5 +1,3 @@
-start_time <- Sys.time()
-
 library("tidyverse")
 library("lubridate")       # Date 
 library("nowcasting")
@@ -33,6 +31,7 @@ library(timetk)
 library(keras)
 library(sigmoid)
 library("dlm")
+library("mFilter")
 
 if (Sys.getenv("USERNAME") =="marcos.muniz"){
   setwd("C:\\Users\\marcos.muniz\\Documents\\pucrio\\tese") 
@@ -44,7 +43,11 @@ if (Sys.getenv("USERNAME") =="marcos.muniz"){
   setwd("C:\\Users\\user\\Documents\\Marcos")
 }
 
+#pré codigo
+rm(list = ls())
+start_time <- Sys.time()
 predict<-stats::predict
+lag <- stats::lag
 
 #puxa os dados do McCracken
 mccrackenbase <- as.data.frame(read.csv("current.csv",dec=".",header = TRUE,sep = "," ))
@@ -63,13 +66,11 @@ mccrack <- cbind(Data = as.data.frame(as_date(datamc)),mccrackenbase[,-1], as.ma
 
 # Declaração de parâmetros
 beginning <- dmy("01/01/1960")
-window    <- 12*40 #número de anos*12meses - um, equivalente à Jan/60
+window    <- 12*40-1 #número de anos*12meses - um, equivalente à Jan/60
 i<-1
 test <- 12*10 #(   years)
 hiddenstates <- 4
 horizonvector <- c(1,3,6,12,24) #para quais períodos 
-
-batch_size <- 12*5 
 
 models <- 11
 models1horizon <- matrix(c("1hRF1lag", "1hRF3lag", "1hRF6lag", "1hRFhs1lag", "1hRFhs3lag", "1hRFhs6lag","1hLSTMcalc", "1hlstmpred","AR1lag","AR3lag","AR6lag"),models,1)
@@ -77,7 +78,6 @@ models3horizon <- matrix(c("3hRF1lag", "3hRF3lag", "3hRF6lag", "3hRFhs1lag", "3h
 models6horizon <- matrix(c("6hRF1lag", "6hRF3lag", "6hRF6lag", "6hRFhs1lag", "6hRFhs3lag", "6hRFhs6lag","6hLSTMcalc", "6hlstmpred","AR1lag","AR3lag","AR6lag"),models,1)
 models12horizon <- matrix(c("12hRF1lag", "12hRF3lag", "12hRF6lag", "12hRFhs1lag", "12hRFhs3lag", "12hRFhs6lag","12hLSTMcalc", "12hlstmpred","AR1lag","AR3lag","AR6lag"),models,1)
 models24horizon <- matrix(c("24hRF1lag", "24hRF3lag", "24hRF6lag", "24hRFhs1lag", "24hRFhs3lag", "24hRFhs6lag","24hLSTMcalc", "24hlstmpred","AR1lag","AR3lag","AR6lag"),models,1)
-
 
 # Criação da matriz de datas que serve de base para as rollingwindows
 forecastingdates <- as.period(interval(beginning+months(window),unemployment[dim(unemployment)[1],1]))
@@ -97,407 +97,364 @@ Wh123e4 <- matrix(0,hiddenstates,nforecast*hiddenstates*4)
 B123e4  <- matrix(0,hiddenstates*4,nforecast*1)
 Wy      <- matrix(0,hiddenstates,nforecast*1)
 By      <- matrix(0,1,nforecast)
-htes    <- matrix(0,window,nforecast*hiddenstates)
+htes    <- matrix(0,window+2,nforecast*hiddenstates)
 htforecast    <- matrix(0,window,nforecast*hiddenstates)
-FORECASTS <- matrix(0,nforecast,models*dim(as.matrix(horizonvector)))
+FORECASTS <- matrix(0,nforecast,dim(as.matrix(horizonvector))[1]*models)
 colnames(FORECASTS) <- cbind(models1horizon,models3horizon,models6horizon,models12horizon,models24horizon)
 lags <- matrix(c(1,3,6),3,1)
 
 tic("LSTM")
-i <- 222
-fh <- 4
-for(fh in 5:5){
-forecasthorizon <- horizonvector[fh]
-######################### INÍCIO DO "FOR" COM OS MODELOS LSTM ######################################
-for(i in 1:((nforecast-forecasthorizon))){
-  
-  Xrwindow <- t(na.omit(t(window(mccrack.ts, start=c(year(ymd(rollingwindow[i,1])),month(rollingwindow[i,1])),end=c(year(ymd(rollingwindow[i,2])),month(rollingwindow[i,2]))))))
-  Yrwindow <- window(unemployment.ts,start=c(year(ymd(rollingwindow[i+1,1])),month(rollingwindow[i+1,1])),end=c(year(ymd(rollingwindow[i,2])),month(rollingwindow[i,2])))
-  Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=c(year(ymd(rollingwindow[i+forecasthorizon,1])),month(rollingwindow[i+forecasthorizon,1])),end=c(year(ymd(rollingwindow[i+forecasthorizon-1,2])),month(rollingwindow[i+forecasthorizon-1,2]))))
-  #Zrwindow <- t(na.omit(t(window(mccrack.ts, start=c(year(ymd(rollingwindow[i+1,1])),month(rollingwindow[i+1,1])),end=c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))))))
-  
-  XeZ <- scale(Xrwindow)
-  
-  mean <- mean(Yrwindow)
-  sigma <- sd(Yrwindow)
-  mean2 <- mean(Y2window)
-  sigma2<- sd(Y2window)
-  
-  X <- XeZ[-dim(XeZ)[1],]
-  Y <- scale(Yrwindow)
-  Y2<- scale(Y2window)
-  Z <- XeZ[-1,]
-  
-  
-  ############# Kalman Filter para cada Loop ############################
-  buildFun <- function(x){
-    dlm(FF = t(matrix(c(1,1))), V = exp(x[1]), GG = matrix(c(1, x[3],0,x[3]),2,2), W = matrix(c(0,0,0,exp(x[2])),2,2), m0 = c(0,0), C0 = matrix(c(1,1,1,1),2,2))
-  }
+i <- 1
+fh <- 5
 
-  datas <- seq(from=as_date(rollingwindow[i+1,1]), to=as_date(rollingwindow[i,2]), by='month')
-  D6 <- data.frame(datas=as.Date(datas),desemprego=Y2window)
-  fit <- dlmMLE(as.matrix(D6), parm = c(0,0,0), build = buildFun)
+for(fh in 1:dim(as.matrix(horizonvector))[1]){
+  forecasthorizon <- horizonvector[fh]
+  ######################### INÍCIO DO "FOR" COM OS MODELOS LSTM ######################################
+  batch_size <- 12
   
-  fit$par
-
-  NileMod <- buildFun(fit$par)
-  Filthy <-   dlmFilter(D6[,2],NileMod)
-  nileSmooth <- dlmSmooth(Filthy)
-  
-  t2 <- Filthy[["m"]][-1,]
-  t3 <- nileSmooth$s[-1,]
-  df <- data.frame(abs=Yrwindow, z=t2[,2],Data=datas)
-  #df <- data.frame(abs=D6[,6], z=t2[,1],Data=D6[,1], j1=pete[,2], j2=pete[,3])
-  df$id <- seq.int(nrow(df))
-  
-  
-  kalman <- ggplot(data=df, aes(x=Data,y=100*abs))+
-    geom_line()+
-    geom_line(linetype=2,aes(y=100*z),color="red")+
-    labs(x="time",y="% of currency premium", title="Simulated Currency Risk Premium", subtitle="black solid line Observed Forward Discount\nred dotted line Estimated Currency Risk Premium")
-  
-  ############### Fim do Filtro de Kalman #############################
-  
-  x_train <- array(X[1:(dim(X)[1]-test),],dim = c((dim(X)[1]-test),  1,dim(X)[2]))
-  y_train <- array(Y[1:(dim(Y)[1]-test),],dim = c((dim(Y)[1]-test),  1,dim(Y)[2]))
-  y2_train<- array(Y2[1:(dim(Y2)[1]-test),],dim = c((dim(Y2)[1]-test),  1,dim(Y2)[2]))
-  z_train <- array(Z[1:(dim(Z)[1]-test),],dim = c((dim(Z)[1]-test),  1,dim(Z)[2]))
-  
-  if(test == 0){
-    x_valid <- NULL
-    y_valid <- NULL
-    y2_train<- NULL
-    z_valid <- NULL
-  }  else {
-    x_valid <- array(X[(dim(X)[1]-test+1):dim(X)[1],],dim = c(test,  1,dim(X)[2]))
-    y_valid <- array(Y[(dim(Y)[1]-test+1):dim(Y)[1],],dim = c(test,  1,dim(Y)[2]))
-    y2_valid <- array(Y2[(dim(Y2)[1]-test+1):dim(Y2)[1],],dim = c(test,  1,dim(Y2)[2]))
-    z_valid <- array(Z[(dim(Z)[1]-test+1):dim(Z)[1],],dim = c(test,  1,dim(Z)[2]))
-  }
-  
-  #------------------------------------ DECLARAR MODELO LSTM ------------------------------------------------#
-  #print_dot_callback <- callback_lambda(
-  #  on_epoch_end = function(epoch, logs) {
-  #    if (epoch %% 80 == 0) cat("\n")
-  #    cat(".")
-  #  }
-  #)
-  rodar <- "yes"
-  try <- 1
-  for(try in 1:3){
-
-  tries <- c(21,51,5)
-        
-  if(rodar == "yes"){  
-  
-  
-  stopcallback <- callback_early_stopping(
-    monitor = "val_mean_squared_error", 
-    min_delta = 0.00,
-    patience = (tries[try]-1),
-    verbose = 0,
-    mode = c("auto", "min", "max"),
-    baseline = NULL, 
-    restore_best_weights = FALSE)
-  
-  model <- keras_model_sequential()
-  
-  model %>%
-    layer_lstm(
-      units = 4, 
-      # the first layer in a model needs to know the shape of the input data
-      # return_sequences = TRUE  #DEVERIA RETORNAR OS HIDDEN STATES 
-      batch_input_shape  = c(batch_size, 1, dim(X)[2]),
-      dropout = 0.1,
-      recurrent_dropout = 0.1,
-      # by default, an LSTM just returns the final state
-      return_sequences = TRUE
-    ) %>% 
-    #   layer_dropout(0.4) %>%
-    time_distributed(layer_dense(units = 1))
-  
-  model %>%
-    compile(
-      loss = "logcosh",
-      optimizer = "Nadam", #NUNCA usar Adagrad e Adadelta (muito ruins). Para i<- 288 Nadam > Adamax > Adam
-      # in addition to the loss, Keras will inform us about current 
-      # MSE while training
-      metrics = list("mean_squared_error")
-    )
-  
-  
-  history <- model %>% fit(
-    x          = x_train,
-    #Y          = y_train,
-    y          = y2_train,
-    #  validation_data = list(x_valid, y_valid),
-    validation_data = list(x_valid, y2_valid),
-    batch_size = batch_size,
-    epochs     = 350,
-    shuffle=FALSE,
-    callbacks = list(stopcallback)
-  )
-  
-  repeticoes <- dim(as.matrix(history$metrics$loss))[1]
-  if(repeticoes == tries[try]){
-    rodar <- "yes"
+  for(i in 1:((nforecast-forecasthorizon))){
     
-  }
-  else{ rodar <- "no"}
-  
-  }
+    # Xr: Explicativas no período analisado (IN+OUT). Necessário para normalização ficar de acordo.
+    # Xr Será filtrado para separar in e out of sample, JÁ NORMALIZADO.
+    # Yr: Nível da explicada IN SAMPLE. Inicia junto a X para tirar a diferença.
+    # Y2: 1a diferença da explicada IN SAMPLE
+    # Zr: Explicativas out of sample (acessível no momento da previsão)
     
-  else{
-      
-  }
+    Xrstart <- c(year(ymd(rollingwindow[i,1])),month(rollingwindow[i,1]))
+    Xrfinal <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+    Yrstart <- c(year(ymd(rollingwindow[i,1])),month(rollingwindow[i,1]))
+    Yrfinal <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+    Y2start <- c(year(ymd(rollingwindow[i+forecasthorizon,1])),month(rollingwindow[i+forecasthorizon,1]))
+    Y2final <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+    Zrstart <- c(year(ymd(rollingwindow[i+1,2]-months(max(lags)))),month(rollingwindow[i+1,2]-months(max(lags))))
+    Zrfinal <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
     
-  }
-  
-  pesos <- get_weights(model)
-  
-  #yhat = model %>% predict(z_valid, batch_size=batch_size)
-  DELyhat = model %>% predict(z_valid, batch_size=batch_size)
-  
-  #FORECASTS[i,8] <- yhat[60]*desvio+mean  
-  FORECASTS[i+forecasthorizon,8+(fh-1)*models] <- DELyhat[60]*sigma2+mean2  
-  
-  #para salvar as matrizes de peso
-  Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1):(i*hiddenstates*4)] <- pesos[[1]]
-  Wh123e4[,((i-1)*hiddenstates*4+1):(i*hiddenstates*4)] <- pesos[[2]]
-  B123e4[,i] <- pesos[[3]]
-  Wy[,i] <- pesos[[4]]
-  By[i] <- pesos[[5]]
-  
-  #Separando as matrizes de pesos em notação mais palpável
-  Wxi <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1):(i*hiddenstates*4-12)]
-  Wxf <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1+4):(i*hiddenstates*4-8)]
-  Wxc <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1+8):(i*hiddenstates*4-4)]
-  Wxo <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1+12):(i*hiddenstates*4)]
-  
-  Whi <- Wh123e4[,((i-1)*hiddenstates*4+1):(i*hiddenstates*4-12)]
-  Whf <- Wh123e4[,((i-1)*hiddenstates*4+1+4):(i*hiddenstates*4-8)]
-  Whc <- Wh123e4[,((i-1)*hiddenstates*4+1+8):(i*hiddenstates*4-4)]
-  Who <- Wh123e4[,((i-1)*hiddenstates*4+1+12):(i*hiddenstates*4)]
-  
-  Bi <- B123e4[1:hiddenstates,i]
-  Bf <- B123e4[(hiddenstates+1):(hiddenstates*2),i]
-  Bc <- B123e4[(hiddenstates*2+1):(hiddenstates*3),i]
-  Bo <- B123e4[(hiddenstates*3+1):(hiddenstates*4),i]
-  
-  Why <- Wy[,i]
-  
-  Bhy <- By[i]
-  
-  #for para criar os hiddenstates a partir da base de X.
-  j<-1
-  hmenos1 <- matrix(0,hiddenstates,1)
-  ctmenos1 <- matrix(0,hiddenstates,1)
-  states <- matrix(0,dim(X)[1],hiddenstates)
-  yt1 <- matrix(0,dim(X),1)
-  
-  # FOR DENTRO DO FOR, PARA CALCULAR OS HT'S A PARTIR DAS MATRIZES DE PESO
-  for(j in 1:(dim(X)[1])){
-    input <- sigmoid(t(Whi)%*%hmenos1 + t(Wxi)%*%X[j,] + Bi)
-    forget <- sigmoid(t(Whf)%*%hmenos1 + t(Wxf)%*%X[j,] + Bf)
-    ctio <- tanh(t(Whc)%*%hmenos1 + t(Wxc)%*%X[j,] + Bc)
-    output <- sigmoid(t(Who)%*%hmenos1 + t(Wxo)%*%X[j,] + Bo)
-    ct <- forget*ctmenos1 + input*ctio
-    ht <- output*tanh(ct)
-    yt1[j] <- t(Why)%*%ht+Bhy
-    
-    states[j,] <- ht
-    hmenos1 <- ht
-    ctmenos1 <- ct
-    
-    htes[j,((i-1)*hiddenstates+1):(i*hiddenstates)] <- ht
-    
-  }
-  
-  states <- matrix(0,dim(X)[1],hiddenstates)
-  yt2 <- matrix(0,dim(X),1)
-  
-  for(j in 1:(dim(X)[1])){
-    input <- sigmoid(t(Whi)%*%hmenos1 + t(Wxi)%*%Z[j,] + Bi)
-    forget <- sigmoid(t(Whf)%*%hmenos1 + t(Wxf)%*%Z[j,] + Bf)
-    ctio <- tanh(t(Whc)%*%hmenos1 + t(Wxc)%*%Z[j,] + Bc)
-    output <- sigmoid(t(Who)%*%hmenos1 + t(Wxo)%*%Z[j,] + Bo)
-    ct <- forget*ctmenos1 + input*ctio
-    ht <- output*tanh(ct)
-    yt2[j] <- t(Why)%*%ht+Bhy
-    
-    states[j,] <- ht
-    hmenos1 <- ht
-    ctmenos1 <- ct
-    
-    htforecast[j,((i-1)*hiddenstates+1):(i*hiddenstates)] <- ht
-    
-    if(j == (dim(X)[1])){
-      FORECASTS[i+forecasthorizon,7+(fh-1)*models] <- (t(Why)%*%ht+Bhy)*sigma2+mean2
-    }else{    }
-  
-
-    ############## RF #################################
-    #for (j in 1:3){
-    #XRF <- embed(XeZ[-dim(XeZ)[1],],lags[j])
-    #YRF <- scale(Yrwindow)
-    #Y2RF <- scale(Y2window)
-    #RF <- embed(XeZ[-1,],lags[j])
-    
-    
-    #arbole <- matrix(0,dim(XRF)[1],dim(XRF)[2]+1)
-    #arbole[,1] <- Y2RF[,-(lags[j]-1)]
-    #arbole[,2:(dim(XRF)[2]+1)] <- XRF
-    #arbole<-as.data.frame(arbole)
-    
-    #rf = randomForest(V1 ~.,data =arbole , ntree=500, nodesize = 10, importance = TRUE)
-    
-    #colnames(ZRF) <- colnames(arbole[,-1])
-    #ZeRF <- ZRF[dim(ZRF)[1],]
-    #ZeRF <- t(ZeRF)
-    
-    #predictpadronizado  <- predict(rf, as.data.frame(ZeRF))
-    #FORECASTS[i+forecasthorizon-1+lags[j],(j+(models*(fh-1)))] <- predictpadronizado*sigma2+mean2
-    #}
-    }
-  
-  yt <- cbind(yt1,yt2)
-  
-k_clear_session()
-}#FIM DO LOOP
-
-toc()
-save.image(file=paste0('LSTM',forecasthorizon, "months", Sys.Date(), '.RData'))
-#load(file='LSTM12months2019-09-24.RData')
-#Rodando RandomForest nos weights
-i<-1
-j<-1
-dropout <- 12 #período a não ser considerado para realizar rf. Início começa com hiddenstates como vetor de zeros.
-lags <- matrix(c(1,3,6),3,1)
-
-
-# FOR COM OS RF'S NOS WEIGHTS CALCULADOS NO LSTM
-for(j in 1:(dim(lags)[1])){
-  
-  for(hs in 1:(nforecast-forecasthorizon+1-lags[j])){
-    ############## RF dos hidden states
-    Yrwindow <- window(unemployment.ts,start=c(year(ymd(rollingwindow[hs+lags[j]+dropout,1])),month(rollingwindow[hs+lags[j]+dropout,1])),end=c(year(ymd(rollingwindow[hs,2])),month(rollingwindow[hs,2])))
-    #Y2window <- as.numeric(window(delu.ts,start=c(year(ymd(rollingwindow[i+lags[j]+dropout,1])),month(rollingwindow[i+lags[j]+dropout,1])),end=c(year(ymd(rollingwindow[i,2])),month(rollingwindow[i,2]))))
-    Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=c(year(ymd(rollingwindow[hs+forecasthorizon+dropout+lags[j]-1,1])),month(rollingwindow[hs+forecasthorizon+dropout+lags[j]-1,1])),end=c(year(ymd(rollingwindow[hs+forecasthorizon-1,2])),month(rollingwindow[hs+forecasthorizon-1,2]))))
+    Xrwindow <- t(na.omit(t(window(mccrack.ts, start=Xrstart,end=Xrfinal))))
+    Yrwindow <- window(unemployment.ts,start=Yrstart,end=Yrfinal)
+    Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=c(year(ymd(rollingwindow[i+forecasthorizon,1])),month(rollingwindow[i+forecasthorizon,1])),end=c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))))
+    #Zrwindow <- t(na.omit(t(window(mccrack.ts, start=c(year(ymd(rollingwindow[i+1,1])),month(rollingwindow[i+1,1])),end=c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))))))
+     
+    XeZ <- scale(Xrwindow)
     
     mean <- mean(Yrwindow)
     sigma <- sd(Yrwindow)
     mean2 <- mean(Y2window)
     sigma2<- sd(Y2window)
     
-    htewindow <- htes[(1+dropout):(dim(htes)[1]),((hs-1)*4+1):(hs*4)]
-    htfuturo <- htforecast[(1+dropout):(dim(htes)[1]),((hs-1)*4+1):(hs*4)]
-    
-    X <- embed(htewindow,lags[j])
-    Y <- scale(Yrwindow)
+    X <- XeZ[1:(dim(XeZ)[1]-forecasthorizon),]
+    # Xnn é o X usado para neuralnetworks
+    Xnn <- X[(nrow(X)-(nrow(X) %/% batch_size * batch_size)+1):nrow(X),] # calculo faz comprimento do Xnn ser multiplo do batchsize
+    Y <- scale(Yrwindow)    
     Y2<- scale(Y2window)
-    Z <- embed(htfuturo,lags[j])
+    # Y2nn é o X usado para neuralnetworks
+    Y2nn <- as.matrix(Y2[(nrow(Y2)-(nrow(Y2) %/% batch_size * batch_size)+1):nrow(Y2),]) # calculo faz comprimento do Y2 ser multiplo do batchsize
+    Z <- XeZ[((dim(XeZ)[1]+1-batch_size):dim(XeZ)[1]),] # Z tem comprimento do batchsize para poder servir como input na função 'predict'
     
-    arbole <- matrix(0,dim(X)[1],dim(X)[2]+1)
-    arbole[,1] <- Y2
-    arbole[,2:(dim(X)[2]+1)] <- X
-    arbole<-as.data.frame(arbole)
+    x_train <- array(Xnn[1:(dim(Xnn)[1]-test),],dim = c((dim(Xnn)[1]-test),  1,dim(Xnn)[2]))
+    y_train <- array(Y[1:(dim(Y)[1]-test),],dim = c((dim(Y)[1]-test),  1,dim(Y)[2]))
+    y2_train<- array(Y2nn[1:(dim(Y2nn)[1]-test)],dim = c((dim(Y2nn)[1]-test),  1,dim(Y2nn)[2]))
+    z_train <- array(Z,dim = c(dim(Z)[1],  1,dim(Z)[2]))
     
-    rf = randomForest(V1 ~.,data =arbole , ntree=500, nodesize = 10, importance = TRUE)
+    if(test == 0){
+      x_valid <- NULL
+      y_valid <- NULL
+      y2_train<- NULL
+      z_valid <- NULL
+    }  else {
+      x_valid <- array(Xnn[(dim(Xnn)[1]-test+1):dim(Xnn)[1],],dim = c(test,  1,dim(Xnn)[2]))
+      y_valid <- array(Y[(dim(Y)[1]-test+1):dim(Y)[1],],dim = c(test,  1,dim(Y)[2]))
+      y2_valid <- array(Y2nn[(dim(Y2nn)[1]-test+1):dim(Y2nn)[1],],dim = c(test,  1,dim(Y2nn)[2]))
+      z_valid <- array(Z,dim = c(dim(Z)[1],  1,dim(Z)[2]))
+    }
     
-    colnames(Z) <- colnames(arbole[,-1])
-    Ze <- Z[dim(Z)[1],]
-    Ze <- t(Ze)
+    #------------------------------------ DECLARAR MODELO LSTM ------------------------------------------------#
+    #print_dot_callback <- callback_lambda(
+    #  on_epoch_end = function(epoch, logs) {
+    #    if (epoch %% 80 == 0) cat("\n")
+    #    cat(".")
+    #  }
+    #)
+    rodar <- "yes"
+    try <- 1
+    for(try in 1:3){
+      
+      tries <- c(21,51,5)
+      
+      if(rodar == "yes"){  
+        
+        stopcallback <- callback_early_stopping(
+          monitor = "val_mean_squared_error", 
+          min_delta = 0.00,
+          patience = (tries[try]-1),
+          verbose = 0,
+          mode = c("auto", "min", "max"),
+          baseline = NULL, 
+          restore_best_weights = FALSE)
+        
+        model <- keras_model_sequential()
+        
+        model %>%
+          layer_lstm(
+            units = 4, 
+            # the first layer in a model needs to know the shape of the input data
+            # return_sequences = TRUE  #DEVERIA RETORNAR OS HIDDEN STATES 
+            batch_input_shape  = c(batch_size, 1, dim(Xnn)[2]),
+            dropout = 0.1,
+            recurrent_dropout = 0.1,
+            # by default, an LSTM just returns the final state
+            return_sequences = TRUE
+          ) %>% 
+          #   layer_dropout(0.4) %>%
+          time_distributed(layer_dense(units = 1))
+        
+        model %>%
+          compile(
+            loss = "logcosh",
+            optimizer = "Nadam", #NUNCA usar Adagrad e Adadelta (muito ruins). Para i<- 288 Nadam > Adamax > Adam
+            # in addition to the loss, Keras will inform us about current 
+            # MSE while training
+            metrics = list("mean_squared_error")
+          )
+        
+        
+        history <- model %>% fit(
+          x          = x_train,
+          #Y          = y_train,
+          y          = y2_train,
+          #  validation_data = list(x_valid, y_valid),
+          validation_data = list(x_valid, y2_valid),
+          batch_size = batch_size,
+          epochs     = 350,
+          shuffle=FALSE,
+          callbacks = list(stopcallback)
+        )
+        
+        repeticoes <- dim(as.matrix(history$metrics$loss))[1]
+        if(repeticoes == tries[try]){
+          rodar <- "yes"
+          
+        }
+        else{ rodar <- "no"}
+        
+      }
+      
+      else{
+        
+      }
+      
+    }
     
-    predictpadronizado  <- predict(rf, as.data.frame(Ze))
-    FORECASTS [hs+forecasthorizon,(j+3)+(fh-1)*models]  <- predictpadronizado*sigma2+mean2
-    print(hs)
+    pesos <- get_weights(model)
+    
+    #yhat = model %>% predict(z_valid, batch_size=batch_size)
+    DELyhat = model %>% predict(z_valid, batch_size=batch_size)
+    
+    #FORECASTS[i,8] <- yhat[60]*desvio+mean  
+    FORECASTS[i+forecasthorizon,8+(fh-1)*models] <- DELyhat[nrow(DELyhat)]*sigma2+mean2  
+    
+    #para salvar as matrizes de peso
+    Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1):(i*hiddenstates*4)] <- pesos[[1]]
+    Wh123e4[,((i-1)*hiddenstates*4+1):(i*hiddenstates*4)] <- pesos[[2]]
+    B123e4[,i] <- pesos[[3]]
+    Wy[,i] <- pesos[[4]]
+    By[i] <- pesos[[5]]
+    
+    #Separando as matrizes de pesos em notação mais palpável
+    Wxi <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1):(i*hiddenstates*4-12)]
+    Wxf <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1+4):(i*hiddenstates*4-8)]
+    Wxc <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1+8):(i*hiddenstates*4-4)]
+    Wxo <- Wx123e4[1:(dim(x_train)[3]),((i-1)*hiddenstates*4+1+12):(i*hiddenstates*4)]
+    
+    Whi <- Wh123e4[,((i-1)*hiddenstates*4+1):(i*hiddenstates*4-12)]
+    Whf <- Wh123e4[,((i-1)*hiddenstates*4+1+4):(i*hiddenstates*4-8)]
+    Whc <- Wh123e4[,((i-1)*hiddenstates*4+1+8):(i*hiddenstates*4-4)]
+    Who <- Wh123e4[,((i-1)*hiddenstates*4+1+12):(i*hiddenstates*4)]
+    
+    Bi <- B123e4[1:hiddenstates,i]
+    Bf <- B123e4[(hiddenstates+1):(hiddenstates*2),i]
+    Bc <- B123e4[(hiddenstates*2+1):(hiddenstates*3),i]
+    Bo <- B123e4[(hiddenstates*3+1):(hiddenstates*4),i]
+    
+    Why <- Wy[,i]
+    
+    Bhy <- By[i]
+    
+    # Pontos iniciais para calcular os hiddenstates
+    j<-1
+    hmenos1 <- matrix(0,hiddenstates,1)
+    ctmenos1 <- matrix(0,hiddenstates,1)
+    states <- matrix(0,dim(XeZ)[1],hiddenstates)
+    yt1 <- matrix(0,dim(XeZ),1)
+    
+    # FOR DENTRO DO FOR, PARA CALCULAR OS HT'S A PARTIR DAS MATRIZES DE PESO e fazer o FORECAST
+    
+    for(j in 1:(dim(XeZ)[1])){
+      input <- sigmoid(t(Whi)%*%hmenos1 + t(Wxi)%*%XeZ[j,] + Bi)
+      forget <- sigmoid(t(Whf)%*%hmenos1 + t(Wxf)%*%XeZ[j,] + Bf)
+      ctio <- tanh(t(Whc)%*%hmenos1 + t(Wxc)%*%XeZ[j,] + Bc)
+      output <- sigmoid(t(Who)%*%hmenos1 + t(Wxo)%*%XeZ[j,] + Bo)
+      ct <- forget*ctmenos1 + input*ctio
+      ht <- output*tanh(ct)
+      yt1[j] <- t(Why)%*%ht+Bhy
+      
+      states[j,] <- ht
+      hmenos1 <- ht
+      ctmenos1 <- ct
+      
+      htes[j,((i-1)*hiddenstates+1):(i*hiddenstates)] <- ht
+      
+      if(j == (dim(XeZ)[1])){
+        FORECASTS[i+forecasthorizon,7+(fh-1)*models] <- (t(Why)%*%ht+Bhy)*sigma2+mean2
+      }else{    }
+      
+    }
+    
+    ###### Fim do forecast via matrizes de peso
+    
+    k_clear_session()
+  } # fim do for para NN de cada horizonte. Ainda ta dentro do for.
+  
+  #Rodando RandomForest nos weights
+  i<-1
+  j<-1
+  dropout <- 12 #período a não ser considerado para realizar rf. Início começa com hiddenstates como vetor de zeros.
+  lags <- matrix(c(1,3,6),3,1)
+  hs<-1
+  
+  # FOR COM OS RF'S NOS WEIGHTS CALCULADOS NO LSTM (dentro do for dos 5 forecasthorizons)
+  for(j in 1:length(lags)){
+    
+    for(hs in 1:(nforecast-forecasthorizon)){
+      
+      ############## RF dos hidden states
+      Yrwindow <- window(unemployment.ts,start=Yrstart,end=Yrfinal)
+      #Y2window <- as.numeric(window(delu.ts,start=c(year(ymd(rollingwindow[i+lags[j]+dropout,1])),month(rollingwindow[i+lags[j]+dropout,1])),end=c(year(ymd(rollingwindow[i,2])),month(rollingwindow[i,2]))))
+      Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=Y2start,end=Y2final))
+      
+      mean <- mean(Yrwindow)
+      sigma <- sd(Yrwindow)
+      mean2 <- mean(Y2window)
+      sigma2<- sd(Y2window)
+      
+      htewindow <- scale(htes[1:(dim(XeZ)[1]),((hs-1)*hiddenstates+1):(hs*hiddenstates)])
+      
+      X <- embed(htewindow[1:(dim(XeZ)[1]-forecasthorizon)],lags[j])
+      Y <- scale(Yrwindow)
+      Y2<- scale(Y2window)
+      Z <- embed(htewindow,lags[j])
+      
+      arbole <- matrix(0,dim(X)[1],dim(X)[2]+1)
+      arbole[,1] <- Y2
+      arbole[,2:(dim(X)[2]+1)] <- X
+      arbole<-as.data.frame(arbole)
+      
+      rf = randomForest(V1 ~.,data =arbole , ntree=500, nodesize = 10, importance = TRUE)
+      
+      colnames(Z) <- colnames(arbole[,-1])
+      Ze <- Z[dim(Z)[1],]
+      Ze <- t(Ze)
+      
+      predictpadronizado  <- predict(rf, as.data.frame(Ze))
+      FORECASTS [hs+forecasthorizon,(j+3)+(fh-1)*models]  <- predictpadronizado*sigma2+mean2
+      print(hs)
+    }
+    
   }
   
 }
 
-}
-
-finaldate <- mccrack[dim(mccrack)[1]-1,1]
-firstdate <- mccrack[dim(mccrack)[1]-dim(FORECASTS)[1],1]
+finaldate <- mccrack[dim(mccrack)[1],1]
+firstdate <- mccrack[dim(mccrack)[1]+1-dim(FORECASTS)[1],1]
 FORECASTS.ts <- ts(FORECASTS,start=c(year(firstdate),month(firstdate)),end=c(year(finaldate),month(finaldate)),frequency=12)
 
-# COMPARAÇÃO DOS RESULTADOS
-compara <- na.omit(cbind(DELTAU.ts,FORECASTS.ts))
-
-# 1 forecast
-bestrf <- matrix(0,5,1)
-bestdl <- matrix(0,5,1)
-for(fh in 5:5){
-  
-forecasthorizon <- horizonvector[fh]
-
-MSERF <- colMeans((compara[,(14+(fh-1)*8):(16+(fh-1)*8)]-compara[,forecasthorizon+1])^2)
-MSEDL <- colMeans((compara[,(17+(fh-1)*8):(21+(fh-1)*8)]-compara[,forecasthorizon+1])^2)
-
-assign(paste0("graphdata",forecasthorizon, "horizon"),cbind(compara[,forecasthorizon+1],compara[,(13+which.min(MSERF)+(fh-1)*8)],compara[,(16+which.min(MSEDL)+(fh-1)*8)]))
-assign(paste0("MSERF",forecasthorizon,"h"),MSERF)
-assign(paste0("MSEDL",forecasthorizon,"h"),MSEDL)
-
-bestrf[fh] <- which.min(MSERF)
-bestdl[fh] <- which.min(MSEDL)
-
-}
-
 i <- 1
-j <- 1
+j <- 2
 
-for(fh in 5:5){
+for(fh in 1:length(horizonvector)){
   forecasthorizon <- horizonvector[fh]
   ######################### INÍCIO DO "FOR" COM OS MODELOS RF's ######################################
   for(j in 1:(dim(lags)[1])){
     
-  for(i in 1:((nforecast-forecasthorizon))){
-    
-############## RF da base de dados total
-Xrwindow <- t(na.omit(t(window(mccrack.ts, start=c(year(ymd(rollingwindow[i,1])),month(rollingwindow[i,1])),end=c(year(ymd(rollingwindow[i,2])),month(rollingwindow[i,2]))))))
-Yrwindow <- window(unemployment.ts,start=c(year(ymd(rollingwindow[i+lags[j],1])),month(rollingwindow[i+lags[j],1])),end=c(year(ymd(rollingwindow[i,2])),month(rollingwindow[i,2])))
-Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=c(year(ymd(rollingwindow[(i+forecasthorizon-1+lags[j]),1])),month(rollingwindow[(i+lags[j]+forecasthorizon-1),1])),end=c(year(ymd(rollingwindow[(i+forecasthorizon-1),2])),month(rollingwindow[(i+forecasthorizon-1),2]))))
-XeZ <- scale(Xrwindow)
-
-mean <- mean(Yrwindow)
-sigma <- sd(Yrwindow)
-mean2 <- mean(Y2window)
-sigma2<- sd(Y2window)
-
-X <- embed(XeZ[-dim(XeZ)[1],],lags[j])
-Y <- scale(Yrwindow)
-Y2<- scale(Y2window)
-Z <- embed(XeZ[-1,],lags[j])
-
-arbole <- matrix(0,dim(X)[1],dim(X)[2]+1)
-arbole[,1] <- Y2
-arbole[,2:(dim(X)[2]+1)] <- X
-arbole<-as.data.frame(arbole)
-
-rf = randomForest(V1 ~.,data =arbole , ntree=500, nodesize = 10, importance = TRUE)
-
-colnames(Z) <- colnames(arbole[,-1])
-Ze <- Z[dim(Z)[1],]
-Ze <- t(Ze)
-
-predictpadronizado  <- predict(rf, as.data.frame(Ze))
-FORECASTS [i+forecasthorizon,(j+(models*(fh-1)))] <- predictpadronizado*sigma2+mean2
-############## Fim do RF da base de dados total
-
-XAR <- embed(Y2window,lags[j]+forecasthorizon)[,-(1:forecasthorizon)]
-Y2AR<- Y2window[-(1:(lags[j]-1+forecasthorizon))]
-ZAR <- embed(Y2window,lags[j])[(dim(as.matrix(Y2window))[1]+1-lags[j]),]
-
-ARmodel <- lm(Y2AR ~ XAR)
-FORECASTS [i+forecasthorizon,(8+j+(models*(fh-1)))] <- c(1,t(ZAR))%*%coef(ARmodel)
-
-
-print(i)
-  }
+    for(i in 1:((nforecast-forecasthorizon))){
+      
+      Xrstart <- c(year(ymd(rollingwindow[i,1])),month(rollingwindow[i,1]))
+      Xrfinal <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+      Yrstart <- c(year(ymd(rollingwindow[i,1])),month(rollingwindow[i,1]))
+      Yrfinal <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+      Y2start <- c(year(ymd(rollingwindow[i+forecasthorizon,1])),month(rollingwindow[i+forecasthorizon,1]))
+      Y2final <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+      Zrstart <- c(year(ymd(rollingwindow[i+1,2]-months(max(lags)))),month(rollingwindow[i+1,2]-months(max(lags))))
+      Zrfinal <- c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))
+      
+      ############## RF da base de dados total
+      Xrwindow <- t(na.omit(t(window(mccrack.ts, start=Xrstart, end=Xrfinal))))
+      Yrwindow <- window(unemployment.ts, start=Yrstart, end=Yrfinal)
+      Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=Y2start,end=Y2final))
+      XeZ <- scale(Xrwindow)
+     
+      mean <- mean(Yrwindow)
+      sigma <- sd(Yrwindow)
+      mean2 <- mean(Y2window)
+      sigma2<- sd(Y2window)
+      
+      X <- embed(XeZ[-((nrow(XeZ)+1-forecasthorizon):nrow(XeZ)),],lags[j])
+      Y <- scale(Yrwindow)
+      Y2<- embed(scale(Y2window),lags[j])[,1] #embed serve apenas para "cortar" início do 
+      Z <- embed(XeZ,lags[j])
+      
+      arbole <- matrix(0,nrow(X),ncol(X)+1)
+      arbole[,1] <- Y2
+      arbole[,2:ncol(arbole)] <- X
+      arbole<-as.data.frame(arbole)
+      
+      rf = randomForest(V1 ~.,data =arbole , ntree=500, nodesize = 10, importance = TRUE)
+      
+      colnames(Z) <- colnames(arbole[,-1])
+      Ze <- Z[nrow(Z),]
+      Ze <- t(Ze)
+      
+      predictpadronizado  <- predict(rf, as.data.frame(Ze))
+      FORECASTS[i+forecasthorizon,(j+(models*(fh-1)))] <- predictpadronizado*sigma2+mean2
+      ############## Fim do RF da base de dados total
+      
+      XAR <- embed(Y2window,lags[j]+forecasthorizon)[,-(1:forecasthorizon)]
+      Y2AR<- Y2window[-(1:(lags[j]-1+forecasthorizon))]
+      ZAR <- embed(Y2window,lags[j])[(dim(as.matrix(Y2window))[1]+1-lags[j]),]
+      
+      ARmodel <- lm(Y2AR ~ XAR)
+      FORECASTS [i+forecasthorizon,(8+j+(models*(fh-1)))] <- c(1,t(ZAR))%*%coef(ARmodel)
+      
+      print(i)
+    }
   }
 }
 
 
+# COMPARAÇÃO DOS RESULTADOS
+compara <- na.omit(cbind(DELTAU.ts,FORECASTS.ts))
+
+# 1 forecast length(horizonvector)
+bestrf <- matrix(0,length(horizonvector),1)
+bestdl <- matrix(0,length(horizonvector),1)
+for(fh in 1:length(horizonvector)){
+  
+  forecasthorizon <- horizonvector[fh]
+  
+  MSERF <- colMeans((compara[,(ncol(DELTAU.ts)+1+(fh-1)*models):(ncol(DELTAU.ts)+3+(fh-1)*models)]-compara[,forecasthorizon+1])^2)
+  MSEDL <- colMeans((compara[,(ncol(DELTAU.ts)+4+(fh-1)*models):(ncol(DELTAU.ts)+7+(fh-1)*models)]-compara[,forecasthorizon+1])^2)
+  
+  assign(paste0("graphdata",forecasthorizon, "horizon"),
+         cbind(compara[,forecasthorizon+1],
+               compara[,(ncol(DELTAU.ts)+which.min(MSERF)+(fh-1)*models)],
+               compara[,(ncol(DELTAU.ts)+3+which.min(MSEDL)+(fh-1)*models)]))
+  
+  assign(paste0("MSERF",forecasthorizon,"h"),MSERF)
+  assign(paste0("MSEDL",forecasthorizon,"h"),MSEDL)
+  
+  bestrf[fh] <- which.min(MSERF)
+  bestdl[fh] <- which.min(MSEDL)
+  
+}
 colnames(graphdata1horizon) <- c("REAL",paste0("RF",bestrf[1],"lags"),paste0(bestdl[1],"model")) 
 colnames(graphdata3horizon) <- c("REAL",paste0("RF",bestrf[2],"lags"),paste0(bestdl[2],"model")) 
 colnames(graphdata6horizon) <- c("REAL",paste0("RF",bestrf[3],"lags"),paste0(bestdl[3],"model"))
@@ -528,14 +485,8 @@ graph12h <- ggplot(data=graph12hdt, aes(x=mês, y=REAL))+
   geom_line(linetype=1,aes(y=RF),color="orange")+
   geom_line(linetype=1,aes(y=DL),color="blue")
 
-graph24hdt <- data.frame(mês=seq(firstdate,finaldate, by = "month"),REAL=graphdata24horizon[,1],RF=graphdata24horizon[,2],DL=graphdata24horizon[,3])
-graph24h <- ggplot(data=graph24hdt, aes(x=mês, y=REAL))+
-  geom_line()+
-  geom_line(linetype=1,aes(y=RF),color="orange")+
-  geom_line(linetype=1,aes(y=DL),color="blue")
 
-
-save.image(file=paste0('HSrfcomplete5horizons.RData'))
+save.image(file=paste0('HSrfcomplete', nforecast,'cycleforecasts.RData'))
 
 end_time <- Sys.time()
 end_time - start_time #2h30min
