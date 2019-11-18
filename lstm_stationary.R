@@ -146,13 +146,18 @@ for(fh in 1:dim(as.matrix(horizonvector))[1]){
     
     Xrwindow <- t(na.omit(t(window(mccrack.ts, start=Xrstart,end=Xrfinal))))
     Yrwindow <- window(unemployment.ts,start=Yrstart,end=Yrfinal)
-    Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=c(year(ymd(rollingwindow[i+forecasthorizon,1])),month(rollingwindow[i+forecasthorizon,1])),end=c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))))
+    Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=Y2start,end=Y2final))
+    X2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=Xrstart,end=Xrfinal))
+    
+    Xrwindow <- cbind(Xrwindow,X2window)
+    
     #Zrwindow <- t(na.omit(t(window(mccrack.ts, start=c(year(ymd(rollingwindow[i+1,1])),month(rollingwindow[i+1,1])),end=c(year(ymd(rollingwindow[i+1,2])),month(rollingwindow[i+1,2]))))))
     
     XeZ <- scale(Xrwindow)
     
     mean <- mean(Yrwindow)
     sigma <- sd(Yrwindow)
+    
     mean2 <- mean(Y2window)
     sigma2<- sd(Y2window)
     
@@ -353,9 +358,9 @@ for(fh in 1:dim(as.matrix(horizonvector))[1]){
       
       htewindow <- scale(htes[1:(dim(XeZ)[1]),((hs-1)*hiddenstates+1):(hs*hiddenstates)])
       
-      X <- embed(htewindow[1:(dim(XeZ)[1]-forecasthorizon)],lags[j])
+      X <- embed(htewindow[1:(dim(XeZ)[1]-forecasthorizon),],lags[j])
       Y <- scale(Yrwindow)
-      Y2<- scale(Y2window)
+      Y2<- embed(scale(Y2window),lags[j])[,1] #embed serve apenas para "cortar" início da série
       Z <- embed(htewindow,lags[j])
       
       arbole <- matrix(0,dim(X)[1],dim(X)[2]+1)
@@ -405,6 +410,11 @@ for(fh in 1:length(horizonvector)){
       Xrwindow <- t(na.omit(t(window(mccrack.ts, start=Xrstart, end=Xrfinal))))
       Yrwindow <- window(unemployment.ts, start=Yrstart, end=Yrfinal)
       Y2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=Y2start,end=Y2final))
+      
+      X2window <- as.numeric(window(DELTAU.ts[,forecasthorizon+1],start=Xrstart,end=Xrfinal))
+      
+      Xrwindow <- cbind(Xrwindow,X2window)
+      
       XeZ <- scale(Xrwindow)
       
       mean <- mean(Yrwindow)
@@ -414,7 +424,7 @@ for(fh in 1:length(horizonvector)){
       
       X <- embed(XeZ[-((nrow(XeZ)+1-forecasthorizon):nrow(XeZ)),],lags[j])
       Y <- scale(Yrwindow)
-      Y2<- embed(scale(Y2window),lags[j])[,1] #embed serve apenas para "cortar" início do 
+      Y2<- embed(scale(Y2window),lags[j])[,1] #embed serve apenas para "cortar" início da série
       Z <- embed(XeZ,lags[j])
       
       arbole <- matrix(0,nrow(X),ncol(X)+1)
@@ -444,65 +454,9 @@ for(fh in 1:length(horizonvector)){
   }
 }
 
-
-# COMPARAÇÃO DOS RESULTADOS
-compara <- na.omit(cbind(DELTAU.ts,FORECASTS.ts))
-
-# 1 forecast length(horizonvector)
-bestrf <- matrix(0,length(horizonvector),1)
-bestdl <- matrix(0,length(horizonvector),1)
-for(fh in 1:length(horizonvector)){
-  
-  forecasthorizon <- horizonvector[fh]
-  
-  MSERF <- colMeans((compara[,(ncol(DELTAU.ts)+1+(fh-1)*models):(ncol(DELTAU.ts)+3+(fh-1)*models)]-compara[,forecasthorizon+1])^2)
-  MSEDL <- colMeans((compara[,(ncol(DELTAU.ts)+4+(fh-1)*models):(ncol(DELTAU.ts)+7+(fh-1)*models)]-compara[,forecasthorizon+1])^2)
-  
-  assign(paste0("graphdata",forecasthorizon, "horizon"),
-         cbind(compara[,forecasthorizon+1],
-               compara[,(ncol(DELTAU.ts)+which.min(MSERF)+(fh-1)*models)],
-               compara[,(ncol(DELTAU.ts)+3+which.min(MSEDL)+(fh-1)*models)]))
-  
-  assign(paste0("MSERF",forecasthorizon,"h"),MSERF)
-  assign(paste0("MSEDL",forecasthorizon,"h"),MSEDL)
-  
-  bestrf[fh] <- which.min(MSERF)
-  bestdl[fh] <- which.min(MSEDL)
-  
-}
-colnames(graphdata1horizon) <- c("REAL",paste0("RF",bestrf[1],"lags"),paste0(bestdl[1],"model")) 
-colnames(graphdata3horizon) <- c("REAL",paste0("RF",bestrf[2],"lags"),paste0(bestdl[2],"model")) 
-colnames(graphdata6horizon) <- c("REAL",paste0("RF",bestrf[3],"lags"),paste0(bestdl[3],"model"))
-colnames(graphdata12horizon) <- c("REAL",paste0("RF",bestrf[4],"lags"),paste0(bestdl[4],"model"))
-colnames(graphdata24horizon) <- c("REAL",paste0("RF",bestrf[5],"lags"),paste0(bestdl[5],"model"))
-
-graph1hdt <- data.frame(mês=seq(firstdate,finaldate, by = "month"),REAL=graphdata1horizon[,1],RF=graphdata1horizon[,2],DL=graphdata1horizon[,3])
-graph1h <- ggplot(data=graph1hdt, aes(x=mês, y=REAL))+
-  geom_line()+
-  geom_line(linetype=1,aes(y=RF),color="orange")+
-  geom_line(linetype=1,aes(y=DL),color="blue")
-
-graph3hdt <- data.frame(mês=seq(firstdate,finaldate, by = "month"),REAL=graphdata3horizon[,1],RF=graphdata3horizon[,2],DL=graphdata3horizon[,3])
-graph3h <- ggplot(data=graph3hdt, aes(x=mês, y=REAL))+
-  geom_line()+
-  geom_line(linetype=1,aes(y=RF),color="orange")+
-  geom_line(linetype=1,aes(y=DL),color="blue")
-
-graph6hdt <- data.frame(mês=seq(firstdate,finaldate, by = "month"),REAL=graphdata6horizon[,1],RF=graphdata6horizon[,2],DL=graphdata6horizon[,3])
-graph6h <- ggplot(data=graph6hdt, aes(x=mês, y=REAL))+
-  geom_line()+
-  geom_line(linetype=1,aes(y=RF),color="orange")+
-  geom_line(linetype=1,aes(y=DL),color="blue")
-
-graph12hdt <- data.frame(mês=seq(firstdate,finaldate, by = "month"),REAL=graphdata12horizon[,1],RF=graphdata12horizon[,2],DL=graphdata12horizon[,3])
-graph12h <- ggplot(data=graph12hdt, aes(x=mês, y=REAL))+
-  geom_line()+
-  geom_line(linetype=1,aes(y=RF),color="orange")+
-  geom_line(linetype=1,aes(y=DL),color="blue")
-
-
-save.image(file=paste0('HSrfcomplete', nforecast,'cycleforecasts.RData'))
-
 end_time <- Sys.time()
-end_time - start_time #2h30min
+end_time - start_time
+
+save.image(file=paste0('HSrfcomplete', nforecast,'statforecasts.RData'))
+
 #############################################################

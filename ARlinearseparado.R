@@ -50,9 +50,9 @@ datafim    <- lastdate-months(1)+months(i)
 inicio <- c(year(datainicio),month(datainicio))
 fim <- c(year(datafim),month(datafim))
 
-# Soma 6 (para absoluto) e 18 (para DEL12-sendo 6 dos AR e 12 do delta.)
+# Soma 6 (para absoluto, do AR) e 18 (para DEL12-sendo 6 dos AR e 12 do delta.)
 inicioy <- c(year(datainicio+months(horizon+6)),month(datainicio+months(horizon+6)))
-iniciodely <- c(year(datainicio+months(horizon+18)),month(datainicio+months(horizon+18)))
+iniciodely <- c(year(datainicio+months(horizon*2+6)),month(datainicio+months(horizon*2+6)))
 
 ######## Montando o X laggado com o U absoluto
 Xzao <- cbind(lag(unemployment.ts,-(horizon+0)),
@@ -79,7 +79,7 @@ DELXzao <- cbind(lag(delta12u.ts,-(horizon+0)),
                  lag(delta12u.ts,-(horizon+4)),
                  lag(delta12u.ts,-(horizon+5)))
 colnames(DELXzao) <- c("DELX1","DELX2","DELX3","DELX4","DELX5","DELX6")
-DELXzao <- window(DELXzao,,start=iniciodely,end=fim)
+DELXzao <- window(DELXzao,start=iniciodely,end=fim)
 
 #tira a última observação pra ser usada no forecast
 DELX1.ts <- DELXzao[-dim(DELXzao)[1],1]
@@ -89,20 +89,21 @@ DELX4.ts <- DELXzao[-dim(DELXzao)[1],1:4]
 DELX5.ts <- DELXzao[-dim(DELXzao)[1],1:5]
 DELX6.ts <- DELXzao[-dim(DELXzao)[1],1:6]
 
-#Só considera a última observação pra ser usada no forecast
-DELX1 <- DELXzao[dim(DELXzao)[1],1]
-DELX2 <- DELXzao[dim(DELXzao)[1],1:2]
-DELX3 <- DELXzao[dim(DELXzao)[1],1:3]
-DELX4 <- DELXzao[dim(DELXzao)[1],1:4]
-DELX5 <- DELXzao[dim(DELXzao)[1],1:5]
-DELX6 <- DELXzao[dim(DELXzao)[1],1:6]
-
 
 Y.ts <- window(unemployment.ts,start=inicioy,end=fim)
 DELY.ts <- window(delta12u.ts,start=iniciodely,end=fim)
 
 #tira a última observação pra estimação
 DELY <- DELY.ts[-dim(as.matrix(DELY.ts))[1]]
+
+#Só considera a última observação pra ser usada no forecast
+DELX1 <- rev(DELY[length(DELY)])
+DELX2 <- rev(DELY[(length(DELY)-1):length(DELY)])
+DELX3 <- rev(DELY[(length(DELY)-2):length(DELY)])
+DELX4 <- rev(DELY[(length(DELY)-3):length(DELY)])
+DELX5 <- rev(DELY[(length(DELY)-4):length(DELY)])
+DELX6 <- rev(DELY[(length(DELY)-5):length(DELY)])
+
 
 #faz a estimação
 DELAR1 <- lm(DELY ~ DELX1.ts)
@@ -119,19 +120,21 @@ ARForecastsU[i,4] <- c(1,DELX4)%*%coef(DELAR4)
 ARForecastsU[i,5] <- c(1,DELX5)%*%coef(DELAR5)
 ARForecastsU[i,6] <- c(1,DELX6)%*%coef(DELAR6)
 
-
 }
+
+excfile <- cbind(DELY,DELX1.ts,DELX2.ts,DELX3.ts,DELX4.ts,DELX5.ts,DELX6.ts)
+
+write_excel_csv(as.data.frame(excfile), "AR12horizon.csv")
 
 
 ARForecastsU.ts <- ts(ARForecastsU,start = c(2001,1),frequency=12)
 ARForecastsU.ts <- round(ARForecastsU.ts,3)
-deltaurealizado <- window(delta12u.ts,start = c(2001,1))
+deltaurealizado <- window(delta12u.ts,start = c(2000,12), end = c(2018,12))
 
 dim(as.matrix(deltaurealizado))
 dim(as.matrix(ARForecastsU.ts))
 
-
-graphdata <- data.frame(mês=seq(as.Date("2001-01-01"),as.Date("2019-01-01"), by = "month"),
+graphdata <- data.frame(mês=seq(as.Date("2000-12-01"),as.Date("2018-12-01"), by = "month"),
                         REAL=deltaurealizado,
                         AR1=ARForecastsU[,1],
                         AR2=ARForecastsU[,2],
@@ -149,9 +152,21 @@ graph <- ggplot(data=graphdata, aes(x=mês, y=REAL))+
   geom_line(linetype=1,aes(y=AR5),color="yellow")+
   geom_line(linetype=1,aes(y=AR6),color="brown")
 
+graphar6 <- ggplot(data=graphdata, aes(x=mês, y=REAL))+
+  geom_line()+
+  geom_line(linetype=1,aes(y=AR6),color="brown")
+
+
+
 ARForecastsU <- round(ARForecastsU,3)
 
 mean((deltaurealizado- ARForecastsU[,1])^2)
+mean((deltaurealizado- ARForecastsU[,2])^2)
+mean((deltaurealizado- ARForecastsU[,3])^2)
+mean((deltaurealizado- ARForecastsU[,4])^2)
+mean((deltaurealizado- ARForecastsU[,5])^2)
+mean((deltaurealizado- ARForecastsU[,6])^2)
+
 rmse(deltaurealizado, ARForecastsU[,2])
 rmse(deltaurealizado, ARForecastsU[,3])
 rmse(deltaurealizado, ARForecastsU[,4])
